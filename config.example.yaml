@@ -1,0 +1,65 @@
+system:
+  addr: 8080
+  mode: release
+
+database:
+  type: mysql
+  host: 127.0.0.1
+  port: 3306
+  db-name: model_transfer
+  username: root
+  password: password
+  max-idle-conns: 10
+  max-open-conns: 100
+  log-mode: error
+
+zap:
+  level: info
+  prefix: '[model-transfer]'
+  format: json
+  director: logs
+  encode-level: LowercaseLevelEncoder
+  stacktrace-key: stacktrace
+  show-line: true
+  log-in-console: true
+  retention-day: 7
+  max-size: 100
+
+providers:
+  - name: openai
+    enabled: true
+    base_url: https://api.openai.com/v1
+    api_key: your-openai-api-key
+    timeout: 300
+    models:
+      - gpt-4
+      - gpt-4-turbo
+      - gpt-3.5-turbo
+
+  - name: anthropic
+    enabled: true
+    base_url: https://api.anthropic.com/v1
+    api_key: your-anthropic-api-key
+    timeout: 300
+    models:
+      - claude-3-opus
+      - claude-3-sonnet
+      - claude-3-haiku
+
+  - name: google
+    enabled: true
+    base_url: https://generativelanguage.googleapis.com/v1
+    api_key: your-google-api-key
+    timeout: 300
+    models:
+      - gemini-pro
+      - gemini-pro-vision
+
+rate_limit:
+  enabled: true
+  default_rpm: 60
+  default_rph: 1000
+
+trace:
+  header_name: X-Trace-Id
+  generate_if_missing: true
