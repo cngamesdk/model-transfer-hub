@@ -20,7 +20,7 @@ func Zap() *zap.Logger {
 	// 创建不同级别的Core
 	cores := internal.Zap()
 
-	logger := zap.New(zapcore.NewTee(cores...), zap.AddCallerSkip(0))
+	logger := zap.New(zapcore.NewTee(cores...), zap.AddCallerSkip(1))
 
 	if global.MTH_CONFIG.Zap.ShowLine {
 		logger = logger.WithOptions(zap.AddCaller())

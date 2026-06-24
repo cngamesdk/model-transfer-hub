@@ -165,6 +165,7 @@ func (s *ProxyService) recordUsage(ctx context.Context, tokenID int64, tokenName
 		if err := global.MTH_DB.Create(usageLog).Error; err != nil {
 			global.MTH_LOG.Error("记录使用日志失败",
 				zap.Error(err),
+				zap.Any("data", usageLog),
 				zap.String("trace_id", traceID),
 			)
 		}
