@@ -15,8 +15,8 @@ type AiToken struct {
 	RequestLimit  int        `gorm:"type:int;not null;default:0;comment:请求频率限制（次/分钟，0=无限制）" json:"request_limit"`
 	ExpireAt      *time.Time `gorm:"type:datetime;comment:过期时间" json:"expire_at"`
 	Status        int8       `gorm:"type:tinyint;not null;default:1;index:idx_status;comment:状态：1-启用 2-禁用" json:"status"`
-	AllowedModels string     `gorm:"type:json;comment:允许的模型列表" json:"allowed_models"`
-	IPWhitelist   string     `gorm:"type:json;comment:IP白名单" json:"ip_whitelist"`
+	AllowedModels string     `gorm:"type:text;comment:允许的模型列表" json:"allowed_models"`
+	IPWhitelist   string     `gorm:"type:text;comment:IP白名单" json:"ip_whitelist"`
 	Creator       string     `gorm:"type:varchar(64)" json:"creator"`
 	CreatedAt     time.Time  `gorm:"type:datetime;not null;autoCreateTime" json:"created_at"`
 	UpdatedAt     time.Time  `gorm:"type:datetime;not null;autoUpdateTime" json:"updated_at"`
