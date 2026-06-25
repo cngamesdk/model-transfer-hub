@@ -30,7 +30,8 @@ func RunServer() {
 		Addr:           addr,
 		Handler:        router,
 		ReadTimeout:    10 * time.Second,
-		WriteTimeout:   10 * time.Second,
+		WriteTimeout:   0, // Disabled for SSE streaming support
+		IdleTimeout:    120 * time.Second,
 		MaxHeaderBytes: 1 << 20,
 	}
 

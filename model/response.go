@@ -54,14 +54,14 @@ type StreamResponse struct {
 	Created int64          `json:"created"`
 	Model   string         `json:"model"`
 	Choices []StreamChoice `json:"choices"`
-	Usage   Usage          `json:"usage"` // OpenAI在最后一个chunk包含usage
+	Usage   *Usage         `json:"usage,omitempty"` // OpenAI在最后一个chunk包含usage
 }
 
 // StreamChoice 流式选择项
 type StreamChoice struct {
 	Index        int          `json:"index"`
 	Delta        MessageDelta `json:"delta"`
-	FinishReason string       `json:"finish_reason,omitempty"`
+	FinishReason *string      `json:"finish_reason"` // null for intermediate chunks
 }
 
 // MessageDelta 消息增量

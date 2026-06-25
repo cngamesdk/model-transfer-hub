@@ -54,4 +54,5 @@ type Server struct {
 	Providers []Provider `mapstructure:"providers" json:"providers" yaml:"providers"`
 	RateLimit RateLimit  `mapstructure:"rate_limit" json:"rate_limit" yaml:"rate_limit"`
 	Trace     Trace      `mapstructure:"trace" json:"trace" yaml:"trace"`
+	DevMode   bool       `mapstructure:"dev_mode" json:"dev_mode" yaml:"dev_mode"`
 }

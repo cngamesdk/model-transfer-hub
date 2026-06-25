@@ -12,7 +12,7 @@ type Adapter interface {
 	GetProviderName() string
 
 	// ChatCompletion 聊天完成（非流式）
-	ChatCompletion(ctx context.Context, req *model.ChatCompletionRequest) (*model.ChatCompletionResponse, error)
+	ChatCompletion(ctx context.Context, req *model.ChatCompletionRequest) (*model.ChatCompletionResponse, any, error)
 
 	// ChatCompletionStream 聊天完成（流式）
 	ChatCompletionStream(ctx context.Context, req *model.ChatCompletionRequest) (io.ReadCloser, error)

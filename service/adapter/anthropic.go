@@ -33,8 +33,10 @@ func NewAnthropicAdapter(provider *config.Provider) *AnthropicAdapter {
 type AnthropicRequest struct {
 	Model       string          `json:"model"`
 	Messages    []model.Message `json:"messages"`
+	System      any             `json:"system,omitempty"`
 	MaxTokens   int             `json:"max_tokens,omitempty"`
 	Temperature float64         `json:"temperature,omitempty"`
+	TopP        float64         `json:"top_p,omitempty"`
 	Stream      bool            `json:"stream,omitempty"`
 }
 
@@ -56,7 +58,7 @@ type AnthropicResponse struct {
 }
 
 // ChatCompletion 聊天完成（非流式）
-func (a *AnthropicAdapter) ChatCompletion(ctx context.Context, req *model.ChatCompletionRequest) (*model.ChatCompletionResponse, error) {
+func (a *AnthropicAdapter) ChatCompletion(ctx context.Context, req *model.ChatCompletionRequest) (*model.ChatCompletionResponse, any, error) {
 	// 转换请求格式
 	anthropicReq := AnthropicRequest{
 		Model:       req.Model,
@@ -72,13 +74,13 @@ func (a *AnthropicAdapter) ChatCompletion(ctx context.Context, req *model.ChatCo
 
 	body, err := json.Marshal(anthropicReq)
 	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
+		return nil, nil, fmt.Errorf("marshal request: %w", err)
 	}
 
 	url := fmt.Sprintf("%s/messages", a.BaseURL)
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(body))
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, nil, fmt.Errorf("create request: %w", err)
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -91,22 +93,22 @@ func (a *AnthropicAdapter) ChatCompletion(ctx context.Context, req *model.ChatCo
 
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("send request: %w", err)
+		return nil, nil, fmt.Errorf("send request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
+		return nil, nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var anthropicResp AnthropicResponse
 	if err := json.NewDecoder(resp.Body).Decode(&anthropicResp); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+		return nil, nil, fmt.Errorf("decode response: %w", err)
 	}
 
 	// 转换为OpenAI格式
-	return a.convertToOpenAIFormat(&anthropicResp), nil
+	return a.convertToOpenAIFormat(&anthropicResp), &anthropicResp, nil
 }
 
 // ChatCompletionStream 聊天完成（流式）
@@ -135,11 +137,13 @@ func (a *AnthropicAdapter) ChatCompletionStream(ctx context.Context, req *model.
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
 	httpReq.Header.Set("x-api-key", a.APIKey)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 
+	// 流式请求不设置超时，避免长时间流式响应被中断
 	client := &http.Client{
-		Timeout: time.Duration(a.Timeout) * time.Second,
+		Timeout: 0,
 	}
 
 	resp, err := client.Do(httpReq)
@@ -153,6 +157,73 @@ func (a *AnthropicAdapter) ChatCompletionStream(ctx context.Context, req *model.
 		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
 	}
 
+	// Convert Anthropic SSE format to OpenAI SSE format
+	return newAnthropicToOpenAIStreamConverter(resp.Body, req.Model), nil
+}
+
+// MessagesRaw 处理Anthropic原生messages请求（非流式）— 纯透传raw bytes
+func (a *AnthropicAdapter) MessagesRaw(ctx context.Context, rawBody []byte) ([]byte, error) {
+	url := fmt.Sprintf("%s/messages", a.BaseURL)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(rawBody))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-api-key", a.APIKey)
+	httpReq.Header.Set("anthropic-version", "2023-06-01")
+
+	client := &http.Client{
+		Timeout: time.Duration(a.Timeout) * time.Second,
+	}
+
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return body, nil
+}
+
+// MessagesStream 处理Anthropic原生messages流式请求 — 纯透传raw bytes
+func (a *AnthropicAdapter) MessagesStream(ctx context.Context, rawBody []byte) (io.ReadCloser, error) {
+	url := fmt.Sprintf("%s/messages", a.BaseURL)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(rawBody))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+	httpReq.Header.Set("x-api-key", a.APIKey)
+	httpReq.Header.Set("anthropic-version", "2023-06-01")
+
+	client := &http.Client{
+		Timeout: 0, // No timeout for streaming
+	}
+
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("send request: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Return raw Anthropic SSE stream — no conversion
 	return resp.Body, nil
 }
 
@@ -172,7 +243,7 @@ func (a *AnthropicAdapter) Completion(ctx context.Context, req *model.Completion
 		Stream:      false,
 	}
 
-	chatResp, err := a.ChatCompletion(ctx, chatReq)
+	chatResp, _, err := a.ChatCompletion(ctx, chatReq)
 	if err != nil {
 		return nil, err
 	}

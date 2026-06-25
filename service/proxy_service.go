@@ -25,14 +25,14 @@ func NewProxyService() *ProxyService {
 }
 
 // ChatCompletion 处理聊天完成请求
-func (s *ProxyService) ChatCompletion(ctx context.Context, req *model.ChatCompletionRequest, tokenID int64, tokenName string) (*model.ChatCompletionResponse, error) {
+func (s *ProxyService) ChatCompletion(ctx context.Context, req *model.ChatCompletionRequest, tokenID int64, tokenName string) (*model.ChatCompletionResponse, any, error) {
 	startTime := time.Now()
 
 	// 获取适配器
 	adp, err := s.factory.GetAdapter(req.Model)
 	if err != nil {
 		logger.Error(ctx, global.MTH_LOG, "获取适配器失败", zap.Error(err), zap.String("model", req.Model))
-		return nil, err
+		return nil, nil, err
 	}
 
 	providerName := adp.GetProviderName()
@@ -43,14 +43,14 @@ func (s *ProxyService) ChatCompletion(ctx context.Context, req *model.ChatComple
 	)
 
 	// 调用适配器
-	resp, err := adp.ChatCompletion(ctx, req)
+	resp, selfData, err := adp.ChatCompletion(ctx, req)
 	if err != nil {
 		logger.Error(ctx, global.MTH_LOG, "AI服务请求失败", zap.Error(err))
 
 		// 记录失败的使用日志
 		s.recordUsage(ctx, tokenID, tokenName, providerName, req.Model, 0, 0, startTime, 500, err.Error())
 
-		return nil, err
+		return nil, nil, err
 	}
 
 	// 记录使用日志
@@ -67,7 +67,7 @@ func (s *ProxyService) ChatCompletion(ctx context.Context, req *model.ChatComple
 		zap.Duration("duration", duration),
 	)
 
-	return resp, nil
+	return resp, selfData, nil
 }
 
 // ChatCompletionStream 处理流式聊天完成请求

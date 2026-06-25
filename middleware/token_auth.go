@@ -16,6 +16,19 @@ func TokenAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 提取Token
 		authHeader := c.GetHeader("Authorization")
+
+		// 开发模式：无Authorization header时注入dummy token
+		if global.MTH_CONFIG.DevMode && authHeader == "" {
+			ctx := logger.WithTokenID(c.Request.Context(), 0)
+			c.Request = c.Request.WithContext(ctx)
+			dummyToken := &model.AiToken{ID: 0, Name: "dev", Status: 1, TokenLimit: 0}
+			c.Set("token_id", int64(0))
+			c.Set("token_name", "dev")
+			c.Set("token", dummyToken)
+			c.Next()
+			return
+		}
+
 		if authHeader == "" {
 			c.JSON(http.StatusUnauthorized, model.ErrorResponse{
 				Error: model.ErrorDetail{

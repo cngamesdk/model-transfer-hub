@@ -24,14 +24,15 @@ func Router() *gin.Engine {
 	v1.Use(middleware.TokenAuth())
 	v1.Use(middleware.RateLimit())
 	{
-		// 聊天完成接口
+		// 聊天完成接口（OpenAI格式）
 		chatHandler := handler.NewChatCompletionsHandler()
 		v1.POST("/chat/completions", chatHandler.Handle)
 
-		// Claude 聊天接口
-		v1.POST("/messages", chatHandler.Handle)
+		// Claude Messages接口（Anthropic原生格式）
+		messagesHandler := handler.NewMessagesHandler()
+		v1.POST("/messages", messagesHandler.HandleMessages)
 
-		// 文本完成接口
+		// 文本完成接口（OpenAI格式）
 		completionsHandler := handler.NewCompletionsHandler()
 		v1.POST("/completions", completionsHandler.Handle)
 	}

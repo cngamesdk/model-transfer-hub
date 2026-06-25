@@ -22,7 +22,9 @@ func (z *Zap) ZapEncodeLevel() zapcore.LevelEncoder {
 
 // TransportLevel 根据字符串转换为zapcore.Level
 func (z *Zap) TransportLevel() zapcore.Level {
-	z.Level = "info" // 默认级别
+	if z.Level == "" {
+		z.Level = "info"
+	}
 	switch z.Level {
 	case "debug":
 		return zapcore.DebugLevel

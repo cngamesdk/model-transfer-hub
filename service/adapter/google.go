@@ -26,11 +26,11 @@ func NewGoogleAdapter(provider *config.Provider) *GoogleAdapter {
 }
 
 // ChatCompletion 聊天完成（非流式）
-func (a *GoogleAdapter) ChatCompletion(ctx context.Context, req *model.ChatCompletionRequest) (*model.ChatCompletionResponse, error) {
+func (a *GoogleAdapter) ChatCompletion(ctx context.Context, req *model.ChatCompletionRequest) (*model.ChatCompletionResponse, any, error) {
 	// TODO: 实现Google Gemini API转换
 	// Google使用不同的API格式，需要转换
 	// 这里先返回未实现错误
-	return nil, ErrNotImplemented
+	return nil, nil, ErrNotImplemented
 }
 
 // ChatCompletionStream 聊天完成（流式）

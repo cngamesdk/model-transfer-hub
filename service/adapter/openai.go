@@ -25,7 +25,7 @@ func NewOpenAIAdapter(provider *config.Provider) *OpenAIAdapter {
 }
 
 // ChatCompletion 聊天完成（非流式）
-func (a *OpenAIAdapter) ChatCompletion(ctx context.Context, req *model.ChatCompletionRequest) (*model.ChatCompletionResponse, error) {
+func (a *OpenAIAdapter) ChatCompletion(ctx context.Context, req *model.ChatCompletionRequest) (*model.ChatCompletionResponse, any, error) {
 	// OpenAI格式本身就是标准格式，直接转发
 	return sendChatCompletionRequest(ctx, a.BaseURL, a.APIKey, a.Timeout, req)
 }

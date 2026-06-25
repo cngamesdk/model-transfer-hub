@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"github.com/cngamesdk/model-transfer-hub/global"
 	"github.com/cngamesdk/model-transfer-hub/model"
 	"github.com/cngamesdk/model-transfer-hub/pkg/logger"
@@ -51,7 +52,7 @@ func (h *ChatCompletionsHandler) Handle(c *gin.Context) {
 
 // handleNormal 处理非流式请求
 func (h *ChatCompletionsHandler) handleNormal(c *gin.Context, req *model.ChatCompletionRequest, tokenID int64, tokenName string) {
-	resp, err := h.proxyService.ChatCompletion(c.Request.Context(), req, tokenID, tokenName)
+	resp, _, err := h.proxyService.ChatCompletion(c.Request.Context(), req, tokenID, tokenName)
 	if err != nil {
 		logger.Error(c.Request.Context(), global.MTH_LOG, "处理聊天完成请求失败", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
@@ -66,13 +67,23 @@ func (h *ChatCompletionsHandler) handleNormal(c *gin.Context, req *model.ChatCom
 	c.JSON(http.StatusOK, resp)
 }
 
-// handleStream 处理流式请求（高性能版本）
+// handleStream 处理流式请求（直接使用 Gin Writer）
 func (h *ChatCompletionsHandler) handleStream(c *gin.Context, req *model.ChatCompletionRequest, tokenID int64, tokenName string) {
 	startTime := time.Now()
 
-	stream, provider, err := h.proxyService.ChatCompletionStream(c.Request.Context(), req, tokenID, tokenName)
+	// 创建独立的 context，不受 HTTP 请求生命周期影响
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 监听客户端断开，当客户端真正断开时取消上游请求
+	go func() {
+		<-c.Request.Context().Done()
+		cancel()
+	}()
+
+	stream, provider, err := h.proxyService.ChatCompletionStream(ctx, req, tokenID, tokenName)
 	if err != nil {
-		logger.Error(c.Request.Context(), global.MTH_LOG, "处理流式聊天完成请求失败", zap.Error(err))
+		logger.Error(ctx, global.MTH_LOG, "处理流式聊天完成请求失败", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, model.ErrorResponse{
 			Error: model.ErrorDetail{
 				Message: "请求处理失败: " + err.Error(),
@@ -88,148 +99,112 @@ func (h *ChatCompletionsHandler) handleStream(c *gin.Context, req *model.ChatCom
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
 
-	// ✅ 初始化异步Token计数器
+	// 初始化Token计数器
 	counter := newAsyncTokenCounter(provider, req.Model)
-
-	// 确保counter在流结束后停止
 	defer counter.stop()
 
-	// 用于异步收集统计结果
-	type streamStats struct {
-		totalTokens int
-		errorMsg    string
-		statusCode  int
+	// 获取响应写入器
+	w := c.Writer
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		logger.Error(ctx, global.MTH_LOG, "响应不支持流式传输")
+		return
 	}
-
-	statsCh := make(chan streamStats, 1)
 
 	// 流式转发
-	c.Stream(func(w io.Writer) bool {
-		streamErr := h.streamForward(w, stream, counter)
-
-		// 流结束后，异步收集统计信息
-		go func() {
-			stats := streamStats{
-				statusCode:  http.StatusOK,
-				totalTokens: counter.getTotalTokens(),
-			}
-
-			if streamErr {
-				stats.statusCode = http.StatusInternalServerError
-				stats.errorMsg = "流式传输中断"
-			}
-
-			select {
-			case statsCh <- stats:
-			default:
-			}
-		}()
-
-		return streamErr
-	})
-
-	// 等待统计结果（带超时）
-	var stats streamStats
-	select {
-	case stats = <-statsCh:
-		// 获取到统计数据
-	case <-time.After(60000 * time.Millisecond):
-		// 超时，使用默认值
-		stats = streamStats{
-			statusCode:  http.StatusOK,
-			totalTokens: counter.getTotalTokens(),
-		}
-	}
-
-	// 计算耗时
-	duration := time.Since(startTime)
-
-	// 异步记录使用日志
-	h.proxyService.RecordStreamUsage(
-		c.Request.Context(),
-		tokenID,
-		tokenName,
-		provider,
-		req.Model,
-		stats.totalTokens,
-		startTime,
-		int(duration.Milliseconds()),
-		stats.statusCode,
-		stats.errorMsg,
-	)
-
-	logger.Info(c.Request.Context(), global.MTH_LOG, "流式响应完成",
-		zap.String("provider", provider),
-		zap.String("model", req.Model),
-		zap.Int("estimated_tokens", stats.totalTokens),
-		zap.Duration("duration", duration),
-	)
-}
-
-// streamForward 高性能流转发
-func (h *ChatCompletionsHandler) streamForward(w io.Writer, stream io.Reader, counter *asyncTokenCounter) bool {
-	// 重用buffer，减少内存分配
 	buf := make([]byte, 4096)
-
-	// 类型断言一次，避免重复判断
-	flusher, canFlush := w.(http.Flusher)
+	streamSuccess := true
+	statusCode := http.StatusOK
+	errorMsg := ""
 
 	for {
 		n, err := stream.Read(buf)
 		if n > 0 {
-			// 写入响应
+			// 写入数据
 			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
-				return false
+				logger.Error(ctx, global.MTH_LOG, "写流异常", zap.Error(writeErr))
+				streamSuccess = false
+				statusCode = http.StatusInternalServerError
+				errorMsg = "写流异常"
+				break
 			}
 
 			// 异步处理token统计
 			counter.processAsync(buf[:n])
 
 			// 立即刷新
-			if canFlush {
-				flusher.Flush()
-			}
+			flusher.Flush()
 		}
 
 		if err != nil {
 			if err == io.EOF {
-				return false
+				// 正常结束
+				break
 			}
-			return false
+			// 检查是否是 context 取消（客户端主动断开）
+			if ctx.Err() != nil {
+				logger.Info(ctx, global.MTH_LOG, "流式传输中断（客户端断开）", zap.Error(err))
+			} else {
+				logger.Error(ctx, global.MTH_LOG, "读取流异常", zap.Error(err))
+			}
+			streamSuccess = false
+			statusCode = http.StatusInternalServerError
+			errorMsg = err.Error()
+			break
 		}
 	}
+
+	if !streamSuccess && statusCode == http.StatusOK {
+		statusCode = http.StatusInternalServerError
+		errorMsg = "流式传输中断"
+	}
+
+	// 计算耗时
+	duration := time.Since(startTime)
+	totalTokens := counter.getTotalTokens()
+
+	// 异步记录使用日志
+	h.proxyService.RecordStreamUsage(
+		ctx,
+		tokenID,
+		tokenName,
+		provider,
+		req.Model,
+		totalTokens,
+		startTime,
+		int(duration.Milliseconds()),
+		statusCode,
+		errorMsg,
+	)
+
+	logger.Info(ctx, global.MTH_LOG, "流式响应完成",
+		zap.String("provider", provider),
+		zap.String("model", req.Model),
+		zap.Int("estimated_tokens", totalTokens),
+		zap.Duration("duration", duration),
+		zap.Bool("success", streamSuccess),
+	)
 }
 
 // asyncTokenCounter 异步Token计数器
 type asyncTokenCounter struct {
-	provider string
-	model    string
-
 	// 使用atomic操作，避免锁竞争
-	inputTokens  int64
-	outputTokens int64
-	totalTokens  int64
+	totalTokens int64
 
 	// 用于批量处理的buffer
-	buffer chan []byte
-	done   chan struct{}
-
-	// 处理器池
-	processor *sseProcessor
+	buffer    chan []byte
+	done      chan struct{}
+	processor *openAITokenProcessor
 }
 
 // ✅ 初始化函数
-func newAsyncTokenCounter(provider, model string) *asyncTokenCounter {
+func newAsyncTokenCounter(_, _ string) *asyncTokenCounter {
 	counter := &asyncTokenCounter{
-		provider: provider,
-		model:    model,
-		buffer:   make(chan []byte, 100), // 缓冲100个批次
-		done:     make(chan struct{}),
-		processor: &sseProcessor{
-			openAIProcessor: newOpenAITokenProcessor(),
-			claudeProcessor: newClaudeTokenProcessor(),
-		},
+		buffer:    make(chan []byte, 100), // 缓冲100个批次
+		done:      make(chan struct{}),
+		processor: newOpenAITokenProcessor(),
 	}
 
 	// 启动后台处理goroutine
@@ -267,17 +242,9 @@ func (c *asyncTokenCounter) processLoop() {
 	}
 }
 
-// processBatch 批量处理token数据
+// processBatch 批量处理token数据 — all providers now emit OpenAI SSE format
 func (c *asyncTokenCounter) processBatch(data []byte) {
-	// 根据provider选择处理器
-	switch {
-	case c.provider == "openai" || c.provider == "azure":
-		c.processor.openAIProcessor.process(data, c)
-	case c.provider == "claude" || c.provider == "anthropic":
-		c.processor.claudeProcessor.process(data, c)
-	default:
-		c.genericProcess(data)
-	}
+	c.processor.process(data, c)
 }
 
 // getTotalTokens 获取总token数
@@ -290,7 +257,7 @@ func (c *asyncTokenCounter) addTokens(tokens int) {
 	atomic.AddInt64(&c.totalTokens, int64(tokens))
 }
 
-// genericProcess 通用token处理
+// genericProcess 通用token处理（fallback）
 func (c *asyncTokenCounter) genericProcess(data []byte) {
 	if len(data) > 0 {
 		tokens := len(data) / 4
@@ -298,12 +265,6 @@ func (c *asyncTokenCounter) genericProcess(data []byte) {
 			c.addTokens(tokens)
 		}
 	}
-}
-
-// sseProcessor SSE数据处理器
-type sseProcessor struct {
-	openAIProcessor *openAITokenProcessor
-	claudeProcessor *claudeTokenProcessor
 }
 
 // openAITokenProcessor OpenAI Token处理器
@@ -319,36 +280,30 @@ func newOpenAITokenProcessor() *openAITokenProcessor {
 	}
 }
 
-// process 处理OpenAI格式
+// process 处理OpenAI格式 SSE chunk
 func (p *openAITokenProcessor) process(data []byte, counter *asyncTokenCounter) {
-	// 按行分割处理
 	lines := bytes.Split(data, []byte("\n"))
 	for _, line := range lines {
 		if len(line) == 0 {
 			continue
 		}
 
-		// 查找data:前缀
 		if !bytes.HasPrefix(line, p.dataPrefix) {
 			continue
 		}
 
-		// 提取data内容
 		jsonData := bytes.TrimSpace(line[len(p.dataPrefix):])
 
-		// 检查[DONE]标记
 		if bytes.Equal(jsonData, p.doneMarker) {
 			return
 		}
 
-		// 提取usage信息
 		p.extractUsage(jsonData, counter)
 	}
 }
 
 // extractUsage 快速提取usage信息
 func (p *openAITokenProcessor) extractUsage(data []byte, counter *asyncTokenCounter) {
-	// 查找total_tokens
 	totalIdx := bytes.Index(data, []byte(`"total_tokens":`))
 	if totalIdx != -1 {
 		numStart := totalIdx + len(`"total_tokens":`)
@@ -364,13 +319,11 @@ func (p *openAITokenProcessor) extractUsage(data []byte, counter *asyncTokenCoun
 		}
 	}
 
-	// 没有精确数据，估算token
 	p.estimateTokens(data, counter)
 }
 
 // estimateTokens 快速估算token数
 func (p *openAITokenProcessor) estimateTokens(data []byte, counter *asyncTokenCounter) {
-	// 查找content字段
 	contentIdx := bytes.Index(data, []byte(`"content":"`))
 	if contentIdx == -1 {
 		contentIdx = bytes.Index(data, []byte(`"content": "`))
@@ -379,7 +332,6 @@ func (p *openAITokenProcessor) estimateTokens(data []byte, counter *asyncTokenCo
 		}
 	}
 
-	// 提取content内容
 	contentStart := contentIdx + bytes.Index(data[contentIdx:], []byte(`"`)) + 1
 	contentStart = contentIdx + bytes.Index(data[contentIdx:], []byte(`"`)) + 1
 	contentEnd := bytes.IndexByte(data[contentStart:], '"')
@@ -389,71 +341,8 @@ func (p *openAITokenProcessor) estimateTokens(data []byte, counter *asyncTokenCo
 
 	content := data[contentStart : contentStart+contentEnd]
 
-	// 快速估算（约4字符/token）
 	if len(content) > 0 {
 		tokens := (len(content) + 3) / 4
 		counter.addTokens(tokens)
-	}
-}
-
-// claudeTokenProcessor Claude Token处理器
-type claudeTokenProcessor struct {
-	messageStart []byte
-	messageDelta []byte
-	messageStop  []byte
-}
-
-func newClaudeTokenProcessor() *claudeTokenProcessor {
-	return &claudeTokenProcessor{
-		messageStart: []byte(`"message_start"`),
-		messageDelta: []byte(`"message_delta"`),
-		messageStop:  []byte(`"message_stop"`),
-	}
-}
-
-// process 处理Claude格式
-func (p *claudeTokenProcessor) process(data []byte, counter *asyncTokenCounter) {
-	if bytes.Contains(data, p.messageStart) {
-		p.processMessageStart(data, counter)
-	} else if bytes.Contains(data, p.messageDelta) {
-		p.processMessageDelta(data, counter)
-	}
-}
-
-func (p *claudeTokenProcessor) processMessageStart(data []byte, counter *asyncTokenCounter) {
-	inputIdx := bytes.Index(data, []byte(`"input_tokens":`))
-	if inputIdx == -1 {
-		return
-	}
-
-	numStart := inputIdx + len(`"input_tokens":`)
-	var tokens int
-	for numStart < len(data) && data[numStart] >= '0' && data[numStart] <= '9' {
-		tokens = tokens*10 + int(data[numStart]-'0')
-		numStart++
-	}
-
-	if tokens > 0 {
-		atomic.StoreInt64(&counter.inputTokens, int64(tokens))
-	}
-}
-
-func (p *claudeTokenProcessor) processMessageDelta(data []byte, counter *asyncTokenCounter) {
-	outputIdx := bytes.Index(data, []byte(`"output_tokens":`))
-	if outputIdx == -1 {
-		return
-	}
-
-	numStart := outputIdx + len(`"output_tokens":`)
-	var tokens int
-	for numStart < len(data) && data[numStart] >= '0' && data[numStart] <= '9' {
-		tokens = tokens*10 + int(data[numStart]-'0')
-		numStart++
-	}
-
-	if tokens > 0 {
-		atomic.StoreInt64(&counter.outputTokens, int64(tokens))
-		totalTokens := int(atomic.LoadInt64(&counter.inputTokens)) + tokens
-		atomic.StoreInt64(&counter.totalTokens, int64(totalTokens))
 	}
 }
