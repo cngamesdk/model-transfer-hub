@@ -139,6 +139,17 @@ model-transfer-hub/
 └── logs/                # 日志目录
 ```
 
+## 使用方式
+### 接入端点：
+- https://ai.cngamesdk.com
+### 令牌
+- 加微信：doudoualvin 申请
+### claude code 配置
+```shell
+export ANTHROPIC_AUTH_TOKEN="sk-xxx" # token
+export ANTHROPIC_BASE_URL="https://ai.cngamesdk.com" # endpoint
+```
+
 ## 开发计划
 
 - [x] 项目初始化
