@@ -71,8 +71,8 @@ func (h *ChatCompletionsHandler) handleNormal(c *gin.Context, req *model.ChatCom
 func (h *ChatCompletionsHandler) handleStream(c *gin.Context, req *model.ChatCompletionRequest, tokenID int64, tokenName string) {
 	startTime := time.Now()
 
-	// 创建独立的 context，不受 HTTP 请求生命周期影响
-	ctx, cancel := context.WithCancel(context.Background())
+	// 创建独立的 context（继承 trace_id/token 等信息），不受 HTTP 请求生命周期影响
+	ctx, cancel := context.WithCancel(c.Request.Context())
 	defer cancel()
 
 	// 监听客户端断开，当客户端真正断开时取消上游请求
@@ -172,7 +172,8 @@ func (h *ChatCompletionsHandler) handleStream(c *gin.Context, req *model.ChatCom
 		tokenName,
 		provider,
 		req.Model,
-		totalTokens,
+		0,           // promptTokens — streams estimate total only
+		totalTokens, // completionTokens
 		startTime,
 		int(duration.Milliseconds()),
 		statusCode,

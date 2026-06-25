@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/cngamesdk/model-transfer-hub/global"
@@ -99,16 +101,17 @@ func (h *MessagesHandler) handleNormal(c *gin.Context, modelName string, rawBody
 
 	// Log usage using raw bytes
 	duration := time.Since(startTime)
-	totalTokens := extractUsageFromResponse(respBytes)
+	inputTokens, outputTokens := extractUsageFromResponse(respBytes)
 	h.proxyService.RecordStreamUsage(
 		c.Request.Context(), tokenID, tokenName,
-		"anthropic", modelName, totalTokens,
+		"anthropic", modelName, inputTokens, outputTokens,
 		startTime, int(duration.Milliseconds()), http.StatusOK, "",
 	)
 
 	logger.Info(c.Request.Context(), global.MTH_LOG, "Messages请求完成",
 		zap.String("model", modelName),
-		zap.Int("total_tokens", totalTokens),
+		zap.Int("input_tokens", inputTokens),
+		zap.Int("output_tokens", outputTokens),
 		zap.Duration("duration", duration),
 	)
 
@@ -118,7 +121,7 @@ func (h *MessagesHandler) handleNormal(c *gin.Context, modelName string, rawBody
 func (h *MessagesHandler) handleStream(c *gin.Context, modelName string, rawBody []byte, tokenID int64, tokenName string) {
 	startTime := time.Now()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(c.Request.Context())
 	defer cancel()
 
 	go func() {
@@ -169,10 +172,12 @@ func (h *MessagesHandler) handleStream(c *gin.Context, modelName string, rawBody
 	streamSuccess := true
 	statusCode := http.StatusOK
 	errorMsg := ""
+	var tokenCounter streamTokenCounter
 
 	for {
 		n, err := stream.Read(buf)
 		if n > 0 {
+			tokenCounter.scan(buf[:n])
 			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
 				streamSuccess = false
 				statusCode = http.StatusInternalServerError
@@ -195,20 +200,38 @@ func (h *MessagesHandler) handleStream(c *gin.Context, modelName string, rawBody
 	duration := time.Since(startTime)
 	h.proxyService.RecordStreamUsage(
 		ctx, tokenID, tokenName,
-		"anthropic", modelName, 0,
+		"anthropic", modelName,
+		int(tokenCounter.inputTokens.Load()),
+		int(tokenCounter.outputTokens.Load()),
 		startTime, int(duration.Milliseconds()), statusCode, errorMsg,
 	)
 
 	logger.Info(ctx, global.MTH_LOG, "Messages流式响应完成",
 		zap.String("model", modelName),
+		zap.Int64("input_tokens", tokenCounter.inputTokens.Load()),
+		zap.Int64("output_tokens", tokenCounter.outputTokens.Load()),
 		zap.Duration("duration", duration),
 		zap.Bool("success", streamSuccess),
 	)
 }
 
-// extractUsageFromResponse extracts total_tokens from raw Anthropic response bytes.
-func extractUsageFromResponse(data []byte) int {
-	// Quick scan for input_tokens / output_tokens
+// streamTokenCounter tracks input/output tokens from Anthropic SSE stream data.
+type streamTokenCounter struct {
+	inputTokens  atomic.Int64
+	outputTokens atomic.Int64
+}
+
+func (c *streamTokenCounter) scan(chunk []byte) {
+	if idx := bytes.Index(chunk, []byte(`"input_tokens":`)); idx != -1 {
+		c.inputTokens.Store(int64(jsonIntAt(chunk, idx+len(`"input_tokens":`))))
+	}
+	if idx := bytes.Index(chunk, []byte(`"output_tokens":`)); idx != -1 {
+		c.outputTokens.Store(int64(jsonIntAt(chunk, idx+len(`"output_tokens":`))))
+	}
+}
+
+// extractUsageFromResponse extracts input/output tokens from raw Anthropic response bytes.
+func extractUsageFromResponse(data []byte) (int, int) {
 	var inputTokens, outputTokens int
 	if idx := jsonIndex(data, `"input_tokens":`); idx != -1 {
 		inputTokens = jsonIntAt(data, idx)
@@ -216,7 +239,7 @@ func extractUsageFromResponse(data []byte) int {
 	if idx := jsonIndex(data, `"output_tokens":`); idx != -1 {
 		outputTokens = jsonIntAt(data, idx)
 	}
-	return inputTokens + outputTokens
+	return inputTokens, outputTokens
 }
 
 func jsonIndex(data []byte, key string) int {

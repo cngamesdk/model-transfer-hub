@@ -48,14 +48,14 @@ func (s *ProxyService) ChatCompletion(ctx context.Context, req *model.ChatComple
 		logger.Error(ctx, global.MTH_LOG, "AI服务请求失败", zap.Error(err))
 
 		// 记录失败的使用日志
-		s.recordUsage(ctx, tokenID, tokenName, providerName, req.Model, 0, 0, startTime, 500, err.Error())
+		s.recordUsage(ctx, tokenID, tokenName, providerName, req.Model, 0, 0, 0, startTime, 500, err.Error())
 
 		return nil, nil, err
 	}
 
 	// 记录使用日志
 	duration := time.Since(startTime)
-	s.recordUsage(ctx, tokenID, tokenName, providerName, req.Model, resp.Usage.TotalTokens, int(duration.Milliseconds()), startTime, 200, "")
+	s.recordUsage(ctx, tokenID, tokenName, providerName, req.Model, resp.Usage.PromptTokens, resp.Usage.CompletionTokens, int(duration.Milliseconds()), startTime, 200, "")
 
 	// 更新Token使用量
 	s.updateTokenUsage(tokenID, resp.Usage.TotalTokens)
@@ -118,14 +118,14 @@ func (s *ProxyService) Completion(ctx context.Context, req *model.CompletionRequ
 		logger.Error(ctx, global.MTH_LOG, "AI服务请求失败", zap.Error(err))
 
 		// 记录失败的使用日志
-		s.recordUsage(ctx, tokenID, tokenName, providerName, req.Model, 0, 0, startTime, 500, err.Error())
+		s.recordUsage(ctx, tokenID, tokenName, providerName, req.Model, 0, 0, 0, startTime, 500, err.Error())
 
 		return nil, err
 	}
 
 	// 记录使用日志
 	duration := time.Since(startTime)
-	s.recordUsage(ctx, tokenID, tokenName, providerName, req.Model, resp.Usage.TotalTokens, int(duration.Milliseconds()), startTime, 200, "")
+	s.recordUsage(ctx, tokenID, tokenName, providerName, req.Model, resp.Usage.PromptTokens, resp.Usage.CompletionTokens, int(duration.Milliseconds()), startTime, 200, "")
 
 	// 更新Token使用量
 	s.updateTokenUsage(tokenID, resp.Usage.TotalTokens)
@@ -141,7 +141,7 @@ func (s *ProxyService) Completion(ctx context.Context, req *model.CompletionRequ
 }
 
 // recordUsage 记录使用日志（异步）
-func (s *ProxyService) recordUsage(ctx context.Context, tokenID int64, tokenName, provider, modelName string, totalTokens, durationMs int, requestTime time.Time, statusCode int, errorMsg string) {
+func (s *ProxyService) recordUsage(ctx context.Context, tokenID int64, tokenName, provider, modelName string, promptTokens, completionTokens, durationMs int, requestTime time.Time, statusCode int, errorMsg string) {
 	traceID := logger.GetTraceID(ctx)
 
 	usageLog := &model.AiUsageLog{
@@ -150,9 +150,9 @@ func (s *ProxyService) recordUsage(ctx context.Context, tokenID int64, tokenName
 		TokenName:      tokenName,
 		Provider:       provider,
 		Model:          modelName,
-		RequestTokens:  0, // 简化版本，暂不区分请求/响应token
-		ResponseTokens: totalTokens,
-		TotalTokens:    totalTokens,
+		RequestTokens:  promptTokens,
+		ResponseTokens: completionTokens,
+		TotalTokens:    promptTokens + completionTokens,
 		RequestTime:    requestTime,
 		ResponseTime:   time.Now(),
 		DurationMs:     durationMs,
@@ -173,11 +173,12 @@ func (s *ProxyService) recordUsage(ctx context.Context, tokenID int64, tokenName
 }
 
 // RecordStreamUsage 记录流式请求的使用日志（公开方法供Handler调用）
-func (s *ProxyService) RecordStreamUsage(ctx context.Context, tokenID int64, tokenName, provider, modelName string, totalTokens int, requestTime time.Time, durationMs, statusCode int, errorMsg string) {
+func (s *ProxyService) RecordStreamUsage(ctx context.Context, tokenID int64, tokenName, provider, modelName string, promptTokens, completionTokens int, requestTime time.Time, durationMs, statusCode int, errorMsg string) {
 	// 记录使用日志
-	s.recordUsage(ctx, tokenID, tokenName, provider, modelName, totalTokens, durationMs, requestTime, statusCode, errorMsg)
+	s.recordUsage(ctx, tokenID, tokenName, provider, modelName, promptTokens, completionTokens, durationMs, requestTime, statusCode, errorMsg)
 
 	// 更新Token使用量
+	totalTokens := promptTokens + completionTokens
 	if totalTokens > 0 && statusCode == 200 {
 		s.updateTokenUsage(tokenID, totalTokens)
 	}
