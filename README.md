@@ -8,9 +8,10 @@ AI 模型统一代理网关，提供 OpenAI 兼容的 API 接口，同时支持 
 - Anthropic 原生 `/v1/messages` 接口（纯透传，支持 tool use / thinking 等全部特性）
 - 流式响应（SSE）— 双格式支持：OpenAI SSE 和 Anthropic SSE
 - Token 认证与权限管理
+- Token 管理 API（MD5 签名验证）
 - 请求限流（RPM / RPH）
 - 请求链路追踪（X-Trace-Id）
-- Token 用量统计（input_tokens / output_tokens 分别记录）
+- Token 用量统计（input_tokens / output_tokens 分别记录，支持分页查询）
 - 日志按天分割、自动滚动
 - 开发模式（`dev_mode`）旁路认证
 
@@ -175,6 +176,108 @@ Content-Type: application/json
 {"model": "gpt-3.5-turbo", "prompt": "Hello", "max_tokens": 10}
 ```
 
+### Token 管理（MD5 签名验证）
+
+Token 管理 API 使用 MD5 签名验证，不同来源可配置独立的签名密钥。
+
+#### 签名规则
+
+1. 在请求头中传入 `X-Source`（来源标识）、`X-Timestamp`（Unix 时间戳或 RFC3339 格式）、`X-Sign`（签名）
+2. 服务端根据 `X-Source` 查找对应的密钥，计算 `md5(请求体 + X-Timestamp值 + 密钥)` 并与 `X-Sign` 比较
+3. 签名超过配置的时间窗口（默认 300 秒）视为过期
+
+```bash
+body='{"token":"my-token","name":"My Token"}'
+timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+secret="your-admin-secret"
+sign=$(echo -n "${body}${timestamp}${secret}" | md5 -r)
+
+curl -X POST http://localhost:8080/v1/token/manage/create \
+  -H "Content-Type: application/json" \
+  -H "X-Source: admin_panel" \
+  -H "X-Timestamp: $timestamp" \
+  -H "X-Sign: $sign" \
+  -d "$body"
+```
+
+#### 创建 Token
+
+```
+POST /v1/token/manage/create
+```
+
+必填字段：`token`、`name`；可选：`type`（1=企业/2=个人）、`token_limit`、`request_limit`、`expire_at`、`allowed_models`、`ip_whitelist`、`creator`。
+
+#### 更新 Token
+
+```
+POST /v1/token/manage/update
+```
+
+必填字段：`token`；仅传递需要更新的字段。
+
+#### 查询 Token 详情
+
+```
+POST /v1/token/manage/detail
+```
+
+```json
+{"token": "my-token"}
+```
+
+#### 查询使用记录（分页 + 汇总）
+
+```
+POST /v1/token/manage/usage
+```
+
+```json
+{
+  "token": "my-token",
+  "start_time": "2026-01-01 00:00:00",
+  "end_time": "2026-12-31 23:59:59",
+  "page": 1,
+  "page_size": 20
+}
+```
+
+响应包含 `records`（分页日志列表，按时间降序）、`summary`（汇总统计）、`pagination`（分页信息）：
+
+```json
+{
+  "data": {
+    "records": [
+      {
+        "id": 1,
+        "trace_id": "xxx",
+        "provider": "openai",
+        "model": "gpt-4",
+        "request_tokens": 100,
+        "response_tokens": 50,
+        "total_tokens": 150,
+        "request_time": "2026-07-01T12:00:00Z",
+        "duration_ms": 1234
+      }
+    ],
+    "summary": {
+      "token_name": "my-token",
+      "total_requests": 100,
+      "total_input_tokens": 50000,
+      "total_output_tokens": 30000,
+      "total_tokens": 80000,
+      "start_time": "2026-01-01 00:00:00",
+      "end_time": "2026-12-31 23:59:59"
+    },
+    "pagination": {
+      "page": 1,
+      "page_size": 20,
+      "total": 100
+    }
+  }
+}
+```
+
 ## Claude Code 接入
 
 将模型中转服务作为 Claude Code 的后端：
@@ -250,6 +353,29 @@ providers:
 | `trace.header_name` | Trace ID 请求头名称 |
 | `trace.generate_if_missing` | 缺失时自动生成 |
 
+### MD5 签名验证
+
+| 字段 | 说明 | 默认值 |
+|------|------|--------|
+| `md5_sign.enabled` | 是否启用签名验证 | `true` |
+| `md5_sign.header_source` | 来源标识请求头名称 | `X-Source` |
+| `md5_sign.header_timestamp` | 时间戳请求头名称 | `X-Timestamp` |
+| `md5_sign.header_sign` | 签名请求头名称 | `X-Sign` |
+| `md5_sign.timeout_seconds` | 签名有效时间窗口（秒） | `300` |
+| `md5_sign.keys` | 来源 → 密钥映射表 | |
+
+```yaml
+md5_sign:
+  enabled: true
+  header_source: X-Source
+  header_timestamp: X-Timestamp
+  header_sign: X-Sign
+  timeout_seconds: 300
+  keys:
+    admin_panel: "your-admin-secret"
+    monitoring: "your-monitoring-secret"
+```
+
 ## 数据库表
 
 ### dim_ai_token — Token 管理
@@ -302,12 +428,14 @@ model-transfer-hub/
 │   ├── trace.go                # Trace ID 注入
 │   ├── logger.go               # 请求日志
 │   ├── token_auth.go           # Bearer Token 验证
+│   ├── md5_sign.go             # MD5 签名验证
 │   └── rate_limit.go           # 限流
 ├── handler/
 │   ├── health.go               # 健康检查
 │   ├── chat_completions.go     # OpenAI /v1/chat/completions
 │   ├── messages_handler.go     # Anthropic /v1/messages（透传）
-│   └── completions.go          # OpenAI /v1/completions
+│   ├── completions.go          # OpenAI /v1/completions
+│   └── token_manage.go         # Token 管理 API（MD5 验签）
 ├── service/
 │   ├── proxy_service.go        # 代理编排 + 用量记录
 │   └── adapter/

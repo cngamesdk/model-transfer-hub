@@ -63,3 +63,12 @@ rate_limit:
 trace:
   header_name: X-Trace-Id
   generate_if_missing: true
+
+md5_sign:
+  enabled: true
+  header_source: X-Source
+  header_timestamp: X-Timestamp
+  header_sign: X-Sign
+  timeout_seconds: 300
+  keys:
+    admin_panel: "your-admin-secret"

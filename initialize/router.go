@@ -37,5 +37,16 @@ func Router() *gin.Engine {
 		v1.POST("/completions", completionsHandler.Handle)
 	}
 
+	// v1 Token管理API组（MD5签名验证）
+	tokenManageHandler := &handler.TokenManageHandler{}
+	v1TokenManage := router.Group("/v1/token/manage")
+	v1TokenManage.Use(middleware.Md5Sign())
+	{
+		v1TokenManage.POST("/create", tokenManageHandler.Create)
+		v1TokenManage.POST("/update", tokenManageHandler.Update)
+		v1TokenManage.POST("/detail", tokenManageHandler.Detail)
+		v1TokenManage.POST("/usage", tokenManageHandler.Usage)
+	}
+
 	return router
 }

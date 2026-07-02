@@ -46,6 +46,16 @@ type Trace struct {
 	GenerateIfMissing bool   `mapstructure:"generate_if_missing" json:"generate_if_missing" yaml:"generate_if_missing"`
 }
 
+// Md5Sign MD5签名验证配置
+type Md5Sign struct {
+	Enabled         bool              `mapstructure:"enabled" json:"enabled" yaml:"enabled"`
+	HeaderSource    string            `mapstructure:"header_source" json:"header_source" yaml:"header_source"`
+	HeaderTimestamp string            `mapstructure:"header_timestamp" json:"header_timestamp" yaml:"header_timestamp"`
+	HeaderSign      string            `mapstructure:"header_sign" json:"header_sign" yaml:"header_sign"`
+	TimeoutSeconds  int               `mapstructure:"timeout_seconds" json:"timeout_seconds" yaml:"timeout_seconds"`
+	Keys            map[string]string `mapstructure:"keys" json:"keys" yaml:"keys"`
+}
+
 // Server 服务配置
 type Server struct {
 	System    System     `mapstructure:"system" json:"system" yaml:"system"`
@@ -54,5 +64,6 @@ type Server struct {
 	Providers []Provider `mapstructure:"providers" json:"providers" yaml:"providers"`
 	RateLimit RateLimit  `mapstructure:"rate_limit" json:"rate_limit" yaml:"rate_limit"`
 	Trace     Trace      `mapstructure:"trace" json:"trace" yaml:"trace"`
+	Md5Sign   Md5Sign    `mapstructure:"md5_sign" json:"md5_sign" yaml:"md5_sign"`
 	DevMode   bool       `mapstructure:"dev_mode" json:"dev_mode" yaml:"dev_mode"`
 }
