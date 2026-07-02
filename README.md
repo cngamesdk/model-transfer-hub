@@ -226,6 +226,51 @@ POST /v1/token/manage/detail
 {"token": "my-token"}
 ```
 
+响应返回全部字段及派生字段：
+```json
+{
+  "data": {
+    "id": 1,
+    "token": "my-token",
+    "name": "My Token",
+    "type": 1,
+    "type_name": "企业",
+    "token_limit": 1000000,
+    "used_tokens": 5000,
+    "remaining_tokens": 995000,
+    "request_limit": 60,
+    "expire_at": "2026-12-31T23:59:59Z",
+    "status": 1,
+    "status_name": "启用",
+    "is_valid": true,
+    "allowed_models": "gpt-4,claude-3",
+    "ip_whitelist": "",
+    "creator": "admin",
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-07-02T12:00:00Z"
+  }
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `id` | 主键 ID |
+| `token` | Token 字符串 |
+| `name` | Token 名称 |
+| `type` / `type_name` | 类型（1=企业 / 2=个人） |
+| `token_limit` | Token 配额上限 |
+| `used_tokens` | 已使用 Token 数 |
+| `remaining_tokens` | 剩余配额（-1 表示无限制） |
+| `request_limit` | 请求频率限制（次/分钟） |
+| `expire_at` | 过期时间 |
+| `status` / `status_name` | 状态（1=启用 / 2=禁用） |
+| `is_valid` | 当前是否有效 |
+| `allowed_models` | 允许的模型列表 |
+| `ip_whitelist` | IP 白名单 |
+| `creator` | 创建者 |
+| `created_at` | 创建时间 |
+| `updated_at` | 更新时间 |
+
 #### 查询使用记录（分页 + 汇总）
 
 ```

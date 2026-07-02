@@ -44,6 +44,28 @@ type TokenManageDetailReq struct {
 	Token string `json:"token" binding:"required"`
 }
 
+// TokenManageDetailResp Token详情响应
+type TokenManageDetailResp struct {
+	ID              int64      `json:"id"`
+	Token           string     `json:"token"`
+	Name            string     `json:"name"`
+	Type            int8       `json:"type"`
+	TypeName        string     `json:"type_name"`
+	TokenLimit      int64      `json:"token_limit"`
+	UsedTokens      int64      `json:"used_tokens"`
+	RemainingTokens int64      `json:"remaining_tokens"`
+	RequestLimit    int        `json:"request_limit"`
+	ExpireAt        *time.Time `json:"expire_at"`
+	Status          int8       `json:"status"`
+	StatusName      string     `json:"status_name"`
+	IsValid         bool       `json:"is_valid"`
+	AllowedModels   string     `json:"allowed_models"`
+	IPWhitelist     string     `json:"ip_whitelist"`
+	Creator         string     `json:"creator"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
 // TokenManageUsageReq 获取Token使用记录请求
 type TokenManageUsageReq struct {
 	Token     string `json:"token" binding:"required"`
@@ -229,8 +251,43 @@ func (h *TokenManageHandler) Detail(c *gin.Context) {
 		return
 	}
 
+	// 计算派生字段
+	typeName := "企业"
+	if aiToken.Type == 2 {
+		typeName = "个人"
+	}
+	statusName := "启用"
+	if aiToken.Status != 1 {
+		statusName = "禁用"
+	}
+	remaining := aiToken.TokenLimit - aiToken.UsedTokens
+	if aiToken.TokenLimit <= 0 {
+		remaining = -1 // 无限制
+	}
+
+	resp := TokenManageDetailResp{
+		ID:              aiToken.ID,
+		Token:           aiToken.Token,
+		Name:            aiToken.Name,
+		Type:            aiToken.Type,
+		TypeName:        typeName,
+		TokenLimit:      aiToken.TokenLimit,
+		UsedTokens:      aiToken.UsedTokens,
+		RemainingTokens: remaining,
+		RequestLimit:    aiToken.RequestLimit,
+		ExpireAt:        aiToken.ExpireAt,
+		Status:          aiToken.Status,
+		StatusName:      statusName,
+		IsValid:         aiToken.IsValid(),
+		AllowedModels:   aiToken.AllowedModels,
+		IPWhitelist:     aiToken.IPWhitelist,
+		Creator:         aiToken.Creator,
+		CreatedAt:       aiToken.CreatedAt,
+		UpdatedAt:       aiToken.UpdatedAt,
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"data": aiToken,
+		"data": resp,
 	})
 }
 
